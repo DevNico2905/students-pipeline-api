@@ -1,0 +1,42 @@
+version: 0.2
+
+# Etapa de CONSTRUCCIÓN (AWS CodeBuild)
+# Imagen recomendada: aws/codebuild/amazonlinux-x86_64-standard:5.0 (incluye Corretto 21)
+
+phases:
+  install:
+    runtime-versions:
+      java: corretto21
+  pre_build:
+    commands:
+      - echo "Iniciando build en $(date)"
+      - java -version
+      - mvn -v
+  build:
+    commands:
+      # 'verify' compila, corre los tests y empaqueta. Si un test falla, el build falla
+      # y CodePipeline NO pasa a la etapa de despliegue.
+      - mvn -B clean verify
+  post_build:
+    commands:
+      - echo "Build terminado en $(date)"
+      - ls -la target/app.jar
+
+# Resultados de JUnit visibles en la pestaña "Reports" de CodeBuild
+reports:
+  junit-tests:
+    files:
+      - 'target/surefire-reports/TEST-*.xml'
+    file-format: JUNITXML
+
+# Artefacto de salida que CodePipeline entrega a Elastic Beanstalk.
+# discard-paths deja app.jar y Procfile en la raíz del zip, que es lo que espera Beanstalk.
+artifacts:
+  files:
+    - target/app.jar
+    - Procfile
+  discard-paths: yes
+
+cache:
+  paths:
+    - '/root/.m2/**/*'
