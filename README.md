@@ -51,12 +51,16 @@ Datos en memoria: se reinician en cada despliegue (suficiente para demostrar el 
 
 ---
 
-# Guía paso a paso (AWS Academy Learner Lab)
+# Guía paso a paso (cuenta personal de AWS)
 
 > **Región:** `us-east-1` (N. Virginia) en todos los servicios.
-> **Regla de oro del Learner Lab:** no puedes crear roles IAM. En **cada** asistente que pida un rol,
-> elige el existente **`LabRole`** (y para EC2, **`LabInstanceProfile`**). Si el asistente intenta
-> crear un rol nuevo, va a fallar.
+> **Por qué cuenta personal y no AWS Academy Learner Lab:** el Learner Lab bloquea
+> `codeconnections:*` (AccessDeniedException), así que CodePipeline no puede conectarse a GitHub.
+> En una cuenta personal cada asistente puede crear sus propios roles de servicio.
+>
+> **Costos:** CodePipeline, CodeBuild y una instancia `t3.micro` entran en la capa gratuita o cuestan centavos.
+> Antes de empezar, crea un presupuesto en **Billing → Budgets → Zero spend budget** para recibir
+> un correo si algo empieza a cobrar. Al terminar, haz la limpieza del Paso 7.
 >
 > 📸 = captura para el informe / video.
 
@@ -84,12 +88,18 @@ Consola → **CodePipeline** → menú izquierdo **Settings → Connections** �
 proveedor **GitHub** → nombre `github-unisalle` → **Connect to GitHub** → **Install a new app**
 (autoriza el repo) → **Connect**. Debe quedar en estado **Available**.
 
-**Por qué primero:** en algunos Learner Lab esta conexión está bloqueada. Si falla, no
-pierdas tiempo configurando lo demás; avísame y pasamos al **Plan B** (al final de esta guía).
+**Por qué primero:** el pipeline necesita esta conexión ya autorizada para leer el repo.
+En *Repository access* da acceso solo a `students-pipeline-api` (mínimo privilegio).
 
 📸 Conexión en estado *Available*.
 
 ## Paso 3 — Crear la aplicación y el entorno de Elastic Beanstalk
+
+**3.0 Rol para las instancias EC2 (solo la primera vez).** Beanstalk necesita un *instance profile*
+que el asistente no siempre crea solo:
+IAM → **Roles** → **Create role** → Trusted entity *AWS service* → Use case **EC2** → políticas
+`AWSElasticBeanstalkWebTier`, `AWSElasticBeanstalkWorkerTier` y `AWSElasticBeanstalkMulticontainerDocker`
+→ nombre **`aws-elasticbeanstalk-ec2-role`** → Create.
 
 Consola → **Elastic Beanstalk** → **Create application**:
 
@@ -99,10 +109,10 @@ Consola → **Elastic Beanstalk** → **Create application**:
 4. **Application code:** *Sample application* (el pipeline subirá la nuestra después).
 5. **Presets:** *Single instance (free tier eligible)* — sin balanceador, más barato y rápido.
 6. **Service access:**
-   - Service role: **Use an existing service role → `LabRole`**
-   - EC2 key pair: `vockey` (opcional)
-   - EC2 instance profile: **`LabInstanceProfile`**
-7. Lo demás por defecto (instancia `t3.micro` o `t3.small`) → **Create**.
+   - Service role: **Create and use new service role** (`aws-elasticbeanstalk-service-role`)
+   - EC2 key pair: ninguno (no hace falta SSH)
+   - EC2 instance profile: **`aws-elasticbeanstalk-ec2-role`** (el del paso 3.0)
+7. Lo demás por defecto; en *Instance types* deja solo **`t3.micro`** → **Create**.
 
 Espera 5–8 min hasta **Health: Ok** y abre la URL del entorno (verás la página de ejemplo de AWS).
 
@@ -117,7 +127,7 @@ Consola → **CodePipeline** → **Create pipeline** → **Build custom pipeline
 **4.1 Configuración**
 - Name: `students-pipeline`
 - Execution mode: *Superseded* · Pipeline type: V2
-- Service role: **Existing service role → `LabRole`**
+- Service role: **New service role** (el asistente lo crea con los permisos necesarios)
 - Advanced settings: Artifact store por defecto (crea el bucket S3 de artefactos).
 
 **4.2 Etapa de Fuente**
@@ -130,8 +140,7 @@ Consola → **CodePipeline** → **Create pipeline** → **Build custom pipeline
 - Project name: `students-pipeline-build`
 - Environment: Managed image · **EC2** · OS **Amazon Linux** · Runtime **Standard** ·
   Image **`aws/codebuild/amazonlinux-x86_64-standard:5.0`**
-- Service role: **Existing service role → `LabRole`** y **desmarca**
-  *“Allow AWS CodeBuild to modify this service role”*
+- Service role: **New service role** (lo crea el asistente)
 - Buildspec: **Use a buildspec file** (toma el `buildspec.yml` del repo)
 - Logs: CloudWatch activado → **Continue to CodePipeline**
 - De vuelta: Build type *Single build* → Next.
@@ -169,31 +178,20 @@ Las tres etapas deben quedar en verde (~5–8 min en total).
 `.value("UP")` por `.value("DOWN")`, y haz push. El pipeline **se detiene en Construcción** y la app sigue
 en 1.1.0. Esto demuestra la integración continua: el código roto no llega a producción. Luego revierte el cambio.
 
-## Paso 7 — Limpieza (presupuesto del Learner Lab)
+## Paso 7 — Limpieza (evitar cobros)
 
-Al terminar de grabar: **Elastic Beanstalk → Actions → Terminate environment**. Opcionalmente, elimina también el pipeline,
-el proyecto de CodeBuild y vacía el bucket de artefactos.
-**Por qué:** el entorno de Beanstalk se vuelve a encender cada vez que inicias el lab y consume crédito.
+Al terminar de grabar y entregar:
+1. **Elastic Beanstalk → Actions → Terminate environment** (y luego *Delete application*).
+2. **CodePipeline** → eliminar `students-pipeline`. **CodeBuild** → eliminar `students-pipeline-build`.
+3. **S3** → vaciar y eliminar el bucket `codepipeline-us-east-1-...`.
 
----
-
-## Plan B — si la conexión con GitHub está bloqueada en el Learner Lab
-
-Usar **Amazon S3 como fuente**:
-1. Crea un bucket con **versionado activado**.
-2. En la etapa de Fuente elige **Amazon S3**, bucket y clave `source/students-pipeline-api.zip`;
-   detección de cambios con **EventBridge** (recomendado).
-3. Para "subir un cambio": `git archive -o students-pipeline-api.zip HEAD` y
-   `aws s3 cp students-pipeline-api.zip s3://<bucket>/source/` (desde tu máquina con las
-   credenciales del lab, en *AWS Details*, o desde CloudShell).
-
-El resto del pipeline (CodeBuild + Beanstalk) es idéntico.
+**Por qué:** la instancia EC2 y su IP pública cobran por hora mientras el entorno exista.
 
 ## Problemas comunes
 
 | Síntoma | Causa probable | Solución |
 |---|---|---|
-| Error de permisos al crear pipeline/proyecto | El asistente intentó crear un rol | Elegir `LabRole` y desmarcar *modify role* |
+| Beanstalk no deja crear el entorno: falta instance profile | No existe el rol de EC2 | Hacer el paso 3.0 |
 | CodeBuild: `Unknown runtime version` | Imagen equivocada | Usar `amazonlinux-x86_64-standard:5.0` |
 | Beanstalk *Degraded* / 502 Bad Gateway | La app no escucha en el 5000 o no arrancó | Revisar `server.port` y los logs: Beanstalk → Logs → *Request last 100 lines* |
 | Deploy falla: no encuentra el jar | Input del deploy = `SourceArtifact` | Cambiarlo a `BuildArtifact` |
